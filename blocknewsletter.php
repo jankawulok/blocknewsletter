@@ -115,7 +115,7 @@ class Blocknewsletter extends Module
 
 	public function install()
 	{
-		if (!parent::install() || !Configuration::updateValue('PS_NEWSLETTER_RAND', rand().rand()) || !$this->registerHook(array('header', 'footer', 'actionCustomerAccountAdd')))
+		if (!parent::install() || !Configuration::updateValue('PS_NEWSLETTER_RAND', rand().rand()) || !$this->registerHook(array('header', 'footer', 'actionCustomerAccountAdd', 'displayTop')))
 			return false;
 
 		Configuration::updateValue('NW_SALT', Tools::passwdGen(16));
@@ -147,6 +147,7 @@ class Blocknewsletter extends Module
 		{
 			Configuration::updateValue('NW_CONFIRMATION_EMAIL', (bool)Tools::getValue('NW_CONFIRMATION_EMAIL'));
 			Configuration::updateValue('NW_VERIFICATION_EMAIL', (bool)Tools::getValue('NW_VERIFICATION_EMAIL'));
+			
 
 			$voucher = Tools::getValue('NW_VOUCHER_CODE');
 			if ($voucher && !Validate::isDiscountName($voucher))
@@ -156,6 +157,31 @@ class Blocknewsletter extends Module
 				Configuration::updateValue('NW_VOUCHER_CODE', pSQL($voucher));
 				$this->_html .= $this->displayConfirmation($this->l('Settings updated'));
 			}
+		}
+		elseif (Tools::isSubmit('submitUpdatePopup')) {
+			Configuration::updateValue('NW_POPUP_ENABLE', (bool)Tools::getValue('NW_POPUP_ENABLE'));
+			Configuration::updateValue('NW_POPUP_WIDTH', (int)Tools::getValue('NW_POPUP_WIDTH'));
+			Configuration::updateValue('NW_POPUP_HEIGHT', (int)Tools::getValue('NW_POPUP_HEIGHT'));
+			Configuration::updateValue('NW_POPUP_DELAY', (int)Tools::getValue('NW_POPUP_DELAY'));
+			Configuration::updateValue('NW_POPUP_EXPIRE', (int)Tools::getValue('NW_POPUP_EXPIRE'));
+			Configuration::updateValue('NW_POPUP_EXPIRE_RATIO', (int)Tools::getValue('NW_POPUP_EXPIRE_RATIO'));
+			Configuration::updateValue('NW_POPUP_TITLE', pSQL(Tools::getValue('NW_POPUP_TITLE')));
+			Configuration::updateValue('NW_POPUP_CONTENT', Tools::getValue('NW_POPUP_CONTENT'), true);
+			Configuration::updateValue('NW_POPUP_FOOTER', (bool)Tools::getValue('NW_POPUP_FOOTER'));
+			$this->_html .= $this->displayConfirmation($this->l('Popup Settings updated'));
+		}
+		elseif (Tools::isSubmit('submitUpdateVoucher')) {
+			Configuration::updateValue('NW_SEND_VOUCHER', (bool)Tools::getValue('NW_SEND_VOUCHER'));
+			Configuration::updateValue('NW_VOUCHER_VALIDITY', (int)Tools::getValue('NW_VOUCHER_VALIDITY'));
+			Configuration::updateValue('NW_VOUCHER_NAME', pSQL(Tools::getValue('NW_VOUCHER_NAME')));
+			Configuration::updateValue('NW_FREE_SHIPPING', (bool)Tools::getValue('NW_FREE_SHIPPING'));
+			Configuration::updateValue('NW_VOUCHER_PARTIAL_USE', (bool)Tools::getValue('NW_VOUCHER_PARTIAL_USE'));
+			Configuration::updateValue('NW_CART_RULE_RESTRICTION', (bool)Tools::getValue('NW_CART_RULE_RESTRICTION'));
+			Configuration::updateValue('NW_MINIMUM_AMOUNT_TAX', (float)Tools::getValue('NW_MINIMUM_AMOUNT_TAX'));
+			Configuration::updateValue('NW_VOUCHER_DISCOUNT_TYPE', pSQL(Tools::getValue('NW_VOUCHER_DISCOUNT_TYPE')));
+			Configuration::updateValue('NW_VOUCHER_REDUCTION_AMOUNT', (float)Tools::getValue('NW_VOUCHER_REDUCTION_AMOUNT'));
+
+			$this->_html .= $this->displayConfirmation($this->l('Voucher Settings updated'));
 		}
 		elseif (Tools::isSubmit('subscribedmerged'))
 		{
@@ -182,6 +208,8 @@ class Blocknewsletter extends Module
 			$this->_searched_email = Tools::getValue('searched_email');
 
 		$this->_html .= $this->renderForm();
+		$this->_html .= $this->renderVoucherForm();
+		$this->_html .= $this->renderPopupForm();
 		$this->_html .= $this->renderSearchForm();
 		$this->_html .= $this->renderList();
 
@@ -387,8 +415,10 @@ class Blocknewsletter extends Module
 					else
 						return $this->error = $this->l('An error occurred during the subscription process.');
 
-					if ($code = Configuration::get('NW_VOUCHER_CODE'))
+					if ( (bool)Configuration::get('NW_SEND_VOUCHER') && $code = $this->addCartRule())
+					{
 						$this->sendVoucher($email, $code);
+					}
 
 					if (Configuration::get('NW_CONFIRMATION_EMAIL'))
 						$this->sendConfirmationEmail($email);
@@ -616,8 +646,10 @@ class Blocknewsletter extends Module
 		if (!$activated)
 			return $this->l('This email is already registered and/or invalid.');
 
-		if ($discount = Configuration::get('NW_VOUCHER_CODE'))
+		if ((bool)Configuration::get('NW_SEND_VOUCHER') && $discount = $this->addCartRule())
+		{
 			$this->sendVoucher($email, $discount);
+		}
 
 		if (Configuration::get('NW_CONFIRMATION_EMAIL'))
 			$this->sendConfirmationEmail($email);
@@ -637,9 +669,10 @@ class Blocknewsletter extends Module
 	{
 		if ($email)
 		{
-			if ($discount = Configuration::get('NW_VOUCHER_CODE'))
+			if ((bool)Configuration::get('NW_SEND_VOUCHER') && $discount = $this->addCartRule())
+			{
 				$this->sendVoucher($email, $discount);
-
+			}
 			if (Configuration::get('NW_CONFIRMATION_EMAIL'))
 				$this->sendConfirmationEmail($email);
 		}
@@ -655,7 +688,7 @@ class Blocknewsletter extends Module
 	 */
 	protected function sendVoucher($email, $code)
 	{
-		return Mail::Send($this->context->language->id, 'newsletter_voucher', Mail::l('Newsletter voucher', $this->context->language->id), array('{discount}' => $code), $email, null, null, null, null, null, dirname(__FILE__).'/mails/', false, $this->context->shop->id);
+		return Mail::Send($this->context->language->id, 'newsletter_voucher', Mail::l('Newsletter voucher', $this->context->language->id), array('{discount}' => $code, '{validity}' => (int)Configuration::get('NW_VOUCHER_VALIDITY')), $email, null, null, null, null, null, dirname(__FILE__).'/mails/', false, $this->context->shop->id);
 	}
 
 	/**
@@ -730,7 +763,24 @@ class Blocknewsletter extends Module
 		if (!isset($this->prepared) || !$this->prepared)
 			$this->_prepareHook($params);
 		$this->prepared = true;
-		return $this->display(__FILE__, 'blocknewsletter.tpl');
+		$return = '';
+		if ( (bool) Configuration::get('NW_POPUP_ENABLE')) {
+			Media::addJsDef(
+	            [
+	                'newsletterpopup_delay' => (int)Configuration::get('NW_POPUP_DELAY'),
+	                'newsletterpopup_expire' => (int)Configuration::get('NW_POPUP_EXPIRE'),
+	            ]
+	        );
+			$this->context->smarty->assign(
+				array(
+					'newsletter_content' => Configuration::get('NW_POPUP_CONTENT'),
+					'newsletter_width' => (int)Configuration::get('NW_POPUP_WIDTH')
+				)
+			);
+			$return .= $this->display(__FILE__, 'popup.tpl');
+		}
+		$return .= $this->display(__FILE__, 'blocknewsletter.tpl');
+		return $return;
 	}
 
 	public function hookFooter($params)
@@ -748,6 +798,7 @@ class Blocknewsletter extends Module
 		$this->context->controller->addCSS($this->_path.'blocknewsletter.css', 'all');
 		$this->context->controller->addJS($this->_path.'blocknewsletter.js');
 	}
+
 
 	/**
 	 * Deletes duplicates email in newsletter table
@@ -794,30 +845,6 @@ class Blocknewsletter extends Module
 							)
 						),
 					),
-					array(
-						'type' => 'switch',
-						'label' => $this->l('Would you like to send a confirmation email after subscription?'),
-						'name' => 'NW_CONFIRMATION_EMAIL',
-						'values' => array(
-							array(
-								'id' => 'active_on',
-								'value' => 1,
-								'label' => $this->l('Yes')
-							),
-							array(
-								'id' => 'active_off',
-								'value' => 0,
-								'label' => $this->l('No')
-							)
-						),
-					),
-					array(
-						'type' => 'text',
-						'label' => $this->l('Welcome voucher code'),
-						'name' => 'NW_VOUCHER_CODE',
-						'class' => 'fixed-width-md',
-						'desc' => $this->l('Leave blank to disable by default.')
-					),
 				),
 				'submit' => array(
 					'title' => $this->l('Save'),
@@ -833,6 +860,247 @@ class Blocknewsletter extends Module
 		$helper->allow_employee_form_lang = Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG') ? Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG') : 0;
 		$helper->identifier = $this->identifier;
 		$helper->submit_action = 'submitUpdate';
+		$helper->currentIndex = $this->context->link->getAdminLink('AdminModules', false).'&configure='.$this->name.'&tab_module='.$this->tab.'&module_name='.$this->name;
+		$helper->token = Tools::getAdminTokenLite('AdminModules');
+		$helper->tpl_vars = array(
+			'fields_value' => $this->getConfigFieldsValues(),
+			'languages' => $this->context->controller->getLanguages(),
+			'id_language' => $this->context->language->id
+		);
+
+		return $helper->generateForm(array($fields_form));
+	}
+
+	public function renderPopupForm()
+	{
+		$fields_form = array(
+			'form' => array(
+				'legend' =>array(
+					'title' => $this->l('Newsletter popup'),
+					'icon' => 'icon-cogs'
+				),
+				'input' => array(
+					array(
+						'type' => 'switch',
+						'label' => $this->l('Enable popup?'),
+						'name' => 'NW_POPUP_ENABLE',
+						'values' => array(
+							array(
+								'id' => 'active_on',
+								'value' => 1,
+								'label' => $this->l('Yes')
+							),
+							array(
+								'id' => 'active_off',
+								'value' => 0,
+								'label' => $this->l('No')
+							)
+						),
+					),
+					array(
+						'label' => $this->l('Width'),
+						'type' => 'text',
+						'name' => 'NW_POPUP_WIDTH',
+						'suffix' => $this->l('px'),
+						'col' => '1',
+					),
+					array(
+						'label' => $this->l('Delay'),
+						'type' => 'text',
+						'name' => 'NW_POPUP_DELAY',
+						'suffix' => $this->l('milliseconds'),
+						'col' => '2',
+					),
+					array(
+						'label' => $this->l('Popup expire'),
+						'type' => 'text',
+						'name' => 'NW_POPUP_EXPIRE',
+						'suffix' => $this->l('day(s)'),
+						'hint' => $this->l('Unit(s) related to selected expire ratio on the field below.'),
+						'col' => '2',
+						'desc' => $this->l('For permanent popup\'s showing without expiration (always appear), just put units to \'0\''),
+					),
+					array(
+						'type' => 'text',
+						'label' => $this->l('Title'),
+						'lang' => false,
+						'name' => 'NW_POPUP_TITLE',
+						'class' => 'text-strong',
+					),
+					array(
+						'type' => 'textarea',
+						'label' => $this->l('Content'),
+						'lang' => false,
+						'name' => 'NW_POPUP_CONTENT',
+						'cols' => 40,
+						'rows' => 10,
+						'class' => 'rte',
+						'autoload_rte' => true,
+					),
+
+				),
+				'submit' => array(
+					'title' => $this->l('Save'),
+				)
+			)
+		);
+		$helper = new HelperForm();
+		$helper->show_toolbar = false;
+		$helper->table = $this->table;
+		$lang = new Language((int)Configuration::get('PS_LANG_DEFAULT'));
+		$helper->default_form_language = $lang->id;
+		$helper->allow_employee_form_lang = Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG') ? Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG') : 0;
+		$helper->identifier = $this->identifier;
+		$helper->submit_action = 'submitUpdatePopup';
+		$helper->currentIndex = $this->context->link->getAdminLink('AdminModules', false).'&configure='.$this->name.'&tab_module='.$this->tab.'&module_name='.$this->name;
+		$helper->token = Tools::getAdminTokenLite('AdminModules');
+		$helper->tpl_vars = array(
+			'fields_value' => $this->getConfigFieldsValues(),
+			'languages' => $this->context->controller->getLanguages(),
+			'id_language' => $this->context->language->id
+		);
+
+		return $helper->generateForm(array($fields_form));
+	}
+
+	public function renderVoucherForm()
+	{
+		$fields_form = array(
+			'form' => array(
+				'legend' =>array(
+					'title' => $this->l('Voucher code'),
+					'icon' => 'icon-cogs'
+				),
+				'input' => array(
+					array(
+						'type' => 'switch',
+						'label' => $this->l('Would you like to send a voucher code after subscription?'),
+						'name' => 'NW_SEND_VOUCHER',
+						'values' => array(
+							array(
+								'id' => 'active_on',
+								'value' => 1,
+								'label' => $this->l('Yes')
+							),
+							array(
+								'id' => 'active_off',
+								'value' => 0,
+								'label' => $this->l('No')
+							)
+						),
+					),
+					array(
+						'type' => 'text',
+						'label' => $this->l('Validity period of the coupon in days'),
+						'name' => 'NW_VOUCHER_VALIDITY',
+						'class' => 'fixed-width-md'
+					),
+					array(
+						'type' => 'text',
+						'label' => $this->l('Voucher name'),
+						'name' => 'NW_VOUCHER_NAME',
+						'class' => 'fixed-width-md'
+					),
+					array(
+						'type' => 'switch',
+						'label' => $this->l('Free shipping?'),
+						'name' => 'NW_FREE_SHIPPING',
+						'values' => array(
+							array(
+								'id' => 'active_on',
+								'value' => 1,
+								'label' => $this->l('Yes')
+							),
+							array(
+								'id' => 'active_off',
+								'value' => 0,
+								'label' => $this->l('No')
+							)
+						),
+					),
+					array(
+						'type' => 'switch',
+						'label' => $this->l('Partial use?'),
+						'name' => 'NW_VOUCHER_PARTIAL_USE',
+						'values' => array(
+							array(
+								'id' => 'active_on',
+								'value' => 1,
+								'label' => $this->l('Yes')
+							),
+							array(
+								'id' => 'active_off',
+								'value' => 0,
+								'label' => $this->l('No')
+							)
+						),
+					),
+					array(
+						'type' => 'switch',
+						'label' => $this->l('Cart rule restriction'),
+						'name' => 'NW_CART_RULE_RESTRICTION',
+						'values' => array(
+							array(
+								'id' => 'active_on',
+								'value' => 1,
+								'label' => $this->l('Yes')
+							),
+							array(
+								'id' => 'active_off',
+								'value' => 0,
+								'label' => $this->l('No')
+							)
+						),
+					),
+					array(
+						'type' => 'radio',
+						'label' => $this->l('Cart rule type'),
+						'name' => 'NW_VOUCHER_DISCOUNT_TYPE',
+						'values' => [
+	                        [
+	                            'id' => 'amount',
+	                            'value' => 'amount',
+	                            'label' => $this->l('amount')
+	                        ],
+	                        [
+	                            'id' => 'percent',
+	                            'value' => 'percent',
+	                            'label' => $this->l('percent')
+	                        ],
+	                        [
+	                            'id' => 'off',
+	                            'value' => 'off',
+	                            'label' => $this->l('off')
+	                        ]
+	                    ],
+					),
+					array(
+						'type' => 'text',
+						'label' => $this->l('Reduction amount'),
+						'name' => 'NW_VOUCHER_REDUCTION_AMOUNT',
+						'class' => 'fixed-width-md'
+					),
+					array(
+						'type' => 'text',
+						'label' => $this->l('Minimum amount with tax'),
+						'name' => 'NW_MINIMUM_AMOUNT_TAX',
+						'class' => 'fixed-width-md'
+					),
+
+				),
+				'submit' => array(
+					'title' => $this->l('Save'),
+				)
+			)
+		);
+		$helper = new HelperForm();
+		$helper->show_toolbar = false;
+		$helper->table = $this->table;
+		$lang = new Language((int)Configuration::get('PS_LANG_DEFAULT'));
+		$helper->default_form_language = $lang->id;
+		$helper->allow_employee_form_lang = Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG') ? Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG') : 0;
+		$helper->identifier = $this->identifier;
+		$helper->submit_action = 'submitUpdateVoucher';
 		$helper->currentIndex = $this->context->link->getAdminLink('AdminModules', false).'&configure='.$this->name.'&tab_module='.$this->tab.'&module_name='.$this->name;
 		$helper->token = Tools::getAdminTokenLite('AdminModules');
 		$helper->tpl_vars = array(
@@ -932,7 +1200,7 @@ class Blocknewsletter extends Module
 		$helper->allow_employee_form_lang = Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG') ? Configuration::get('PS_BO_ALLOW_EMPLOYEE_FORM_LANG') : 0;
 		$helper->id = (int)Tools::getValue('id_carrier');
 		$helper->identifier = $this->identifier;
-		$helper->submit_action = 'btnSubmit';
+		$helper->submit_action = 'submitUpdate';
 		$helper->currentIndex = $this->context->link->getAdminLink('AdminModules', false).'&configure='.$this->name.'&tab_module='.$this->tab.'&module_name='.$this->name;
 		$helper->token = Tools::getAdminTokenLite('AdminModules');
 		$helper->tpl_vars = array(
@@ -946,7 +1214,7 @@ class Blocknewsletter extends Module
 
 	public function renderSearchForm()
 	{
-				$fields_form = array(
+		$fields_form = array(
 			'form' => array(
 				'legend' => array(
 					'title' => $this->l('Search for addresses'),
@@ -988,10 +1256,33 @@ class Blocknewsletter extends Module
 		return array(
 			'NW_VERIFICATION_EMAIL' => Tools::getValue('NW_VERIFICATION_EMAIL', Configuration::get('NW_VERIFICATION_EMAIL')),
 			'NW_CONFIRMATION_EMAIL' => Tools::getValue('NW_CONFIRMATION_EMAIL', Configuration::get('NW_CONFIRMATION_EMAIL')),
-			'NW_VOUCHER_CODE' => Tools::getValue('NW_VOUCHER_CODE', Configuration::get('NW_VOUCHER_CODE')),
+			'NW_VOUCHER_NAME' => Tools::getValue('NW_VOUCHER_NAME', Configuration::get('NW_VOUCHER_NAME')),
+			'NW_VOUCHER_PARTIAL_USE' => Tools::getValue('NW_VOUCHER_PARTIAL_USE', Configuration::get('NW_VOUCHER_PARTIAL_USE')),
+			'NW_CART_RULE_RESTRICTION' => Tools::getValue('NW_CART_RULE_RESTRICTION', Configuration::get('NW_CART_RULE_RESTRICTION')),
+			'NW_MINIMUM_AMOUNT_TAX' => Tools::getValue('NW_MINIMUM_AMOUNT_TAX', Configuration::get('NW_MINIMUM_AMOUNT_TAX')),
+			'NW_PRODUCT_RESTRICTION' => Tools::getValue('NW_PRODUCT_RESTRICTION', Configuration::get('NW_PRODUCT_RESTRICTION')),
+			'NW_FREE_SHIPPING' => Tools::getValue('NW_FREE_SHIPPING', Configuration::get('NW_FREE_SHIPPING')),
+			'NW_REDUCTION_PERCENT' => Tools::getValue('NW_REDUCTION_PERCENT', Configuration::get('NW_REDUCTION_PERCENT')),
+			'NW_TAX_AMOUNT' => Tools::getValue('NW_TAX_AMOUNT', Configuration::get('NW_TAX_AMOUNT')),
+			'NW_REDUCTION_TAX' => Tools::getValue('NW_REDUCTION_TAX', Configuration::get('NW_REDUCTION_TAX')),
+			'NW_REDUCTION_PRODUCT' => Tools::getValue('NW_REDUCTION_PRODUCT', Configuration::get('NW_REDUCTION_PRODUCT')),
+			'NW_GIFT_PRODUCT' => Tools::getValue('NW_GIFT_PRODUCT', Configuration::get('NW_GIFT_PRODUCT')),
+			'NW_SEND_VOUCHER' => Tools::getValue('NW_SEND_VOUCHER', Configuration::get('NW_SEND_VOUCHER')),
+			'NW_VOUCHER_VALIDITY' => Tools::getValue('NW_VOUCHER_VALIDITY', Configuration::get('NW_VOUCHER_VALIDITY')),
+			'NW_VOUCHER_DISCOUNT_TYPE' => Tools::getValue('NW_VOUCHER_DISCOUNT_TYPE', Configuration::get('NW_VOUCHER_DISCOUNT_TYPE')),
+			'NW_VOUCHER_REDUCTION_AMOUNT' => Tools::getValue('NW_VOUCHER_REDUCTION_AMOUNT', Configuration::get('NW_VOUCHER_REDUCTION_AMOUNT')),
 			'COUNTRY' => Tools::getValue('COUNTRY'),
 			'SUSCRIBERS' => Tools::getValue('SUSCRIBERS'),
 			'OPTIN' => Tools::getValue('OPTIN'),
+			'NW_POPUP_ENABLE' => Tools::getValue('NW_POPUP_ENABLE', Configuration::get('NW_POPUP_ENABLE')),
+			'NW_POPUP_WIDTH' => Tools::getValue('NW_POPUP_WIDTH', Configuration::get('NW_POPUP_WIDTH')),
+			'NW_POPUP_HEIGHT' => Tools::getValue('NW_POPUP_HEIGHT', Configuration::get('NW_POPUP_HEIGHT')),
+			'NW_POPUP_DELAY' => Tools::getValue('NW_POPUP_DELAY', Configuration::get('NW_POPUP_DELAY')),
+			'NW_POPUP_EXPIRE' => Tools::getValue('NW_POPUP_EXPIRE', Configuration::get('NW_POPUP_EXPIRE')),
+			'NW_POPUP_EXPIRE_RATIO' => Tools::getValue('NW_POPUP_EXPIRE_RATIO', Configuration::get('NW_POPUP_EXPIRE_RATIO')),
+			'NW_POPUP_TITLE' => Tools::getValue('NW_POPUP_TITLE', Configuration::get('NW_POPUP_TITLE')),
+			'NW_POPUP_CONTENT' => Tools::getValue('NW_POPUP_CONTENT', Configuration::get('NW_POPUP_CONTENT')),
+			'NW_POPUP_FOOTER' => Tools::getValue('NW_POPUP_FOOTER', Configuration::get('NW_POPUP_FOOTER')),
 			'action' => 'customers',
 		);
 	}
@@ -1096,5 +1387,48 @@ class Blocknewsletter extends Module
 		$line .= "\n";
 		if (!fwrite($fd, $line, 4096))
 			$this->post_errors[] = $this->l('Error: Write access limited').' '.dirname(__FILE__).'/'.$this->file.' !';
+	}
+
+	/**
+     * Create cart rule
+     *
+     * @return string Cart Rule code
+     *
+     */
+	private function addCartRule() {
+		$cartRule = new CartRule();
+		$cartRule->name[$this->context->language->id] = Configuration::get('NW_VOUCHER_NAME');
+		$cartRule->date_from = date('Y-m-d H:i:s');
+		$cartRule->date_to = date('Y-m-d H:00:00', strtotime((int)Configuration::get('NW_VOUCHER_VALIDITY').' day'));
+		$cartRule->partial_use = Configuration::get('NW_VOUCHER_PARTIAL_USE');
+		$cartRule->code = 'NL'.Tools::passwdGen(6);
+		$cartRule->minimum_amount = (float)Configuration::get('NW_MINIMUM_AMOUNT_TAX');
+		$cartRule->cart_rule_restriction = (bool)Configuration::get('NW_CART_RULE_RESTRICTION');
+		$cartRule->product_restriction = Configuration::get('NW_PRODUCT_RESTRICTION');
+		$cartRule->shop_restriction = $this->context->shop->id;
+		$cartRule->free_shipping = Configuration::get('NW_FREE_SHIPPING');
+		switch (Configuration::get('NW_VOUCHER_DISCOUNT_TYPE')) {
+			case 'off':
+				break;
+			case 'amount':
+				$cartRule->reduction_amount = (float)Configuration::get('NW_VOUCHER_REDUCTION_AMOUNT');
+				break;
+			case 'percent':
+				$cartRule->reduction_percent = (float)Configuration::get('NW_VOUCHER_REDUCTION_AMOUNT');
+				break;
+			default:
+				# code...
+				break;
+		}
+		$cartRule->minimum_amount_tax = true;
+		$cartRule->reduction_product = Configuration::get('NW_REDUCTION_PRODUCT');
+		$cartRule->gift_product = Configuration::get('NW_GIFT_PRODUCT');
+		$cartRule->gift_product_attribute = Configuration::get('NW_GIFT_PRODUCT_ATTRIBUTE');
+		$cartRule->highlight = false;
+		if ($cartRule->add()) {
+			return $cartRule->code;
+		}
+
+
 	}
 }

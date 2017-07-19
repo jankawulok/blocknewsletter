@@ -54,3 +54,24 @@
 }
 *:first-child+html #newsletter_block_left input.button_mini {padding-left:24px !important;}/* hack ie 7 */
 
+#blocknewsletter-popup button.close {
+	font-size: 3em;
+	position: absolute;
+	z-index: 1;
+	right: 10px;
+}
+#blocknewsletter-popup .modal-content {
+	border-radius: 0;
+}
+#blocknewsletter-popup .modal-content img {
+	max-width: 100%;
+}
+#blocknewsletter-popup .blocknewsletterpopup-form {
+	position: absolute;
+    bottom: 0;
+    width: 100%;
+}
+#blocknewsletter-popup .blocknewsletterpopup-form form {
+	margin: 0 auto;
+	text-align: center;
+}
